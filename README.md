@@ -4,8 +4,6 @@ A full **perception → planning → control** pipeline for a 7-DoF robot arm in
 a top-down camera detects a cube, the pixel is converted to a table position, 6-DoF inverse
 kinematics plans the grasp, and a gravity-compensated position controller picks it up.
 Prototyped in Python; the IK solver is also implemented in **C++ (Eigen + MuJoCo C API)**.
-
-![Demo](demo.gif)
 <p align="center">
   <img src="demo.gif" width="600">
 </p>
