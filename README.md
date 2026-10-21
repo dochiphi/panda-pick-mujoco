@@ -6,6 +6,9 @@ kinematics plans the grasp, and a gravity-compensated position controller picks 
 Prototyped in Python; the IK solver is also implemented in **C++ (Eigen + MuJoCo C API)**.
 
 ![Demo](demo.gif)
+<div style="text-align: center;">
+  <img src="demo.gif" alt="Demo">
+</div>
 ![Top camera view](top_view.png)
 
 ## Results
