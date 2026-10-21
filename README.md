@@ -10,8 +10,6 @@ Prototyped in Python; the IK solver is also implemented in **C++ (Eigen + MuJoCo
   <img src="demo.gif" width="600">
 </p>
 <p align="center">
-  <em>Demo</em>
-</p>
 
 ## Results
 
