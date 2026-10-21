@@ -5,6 +5,7 @@ a top-down camera detects a cube, the pixel is converted to a table position, 6-
 kinematics plans the grasp, and a gravity-compensated position controller picks it up.
 Prototyped in Python; the IK solver is also implemented in **C++ (Eigen + MuJoCo C API)**.
 
+![Demo](demo.gif)
 ![Top camera view](top_view.png)
 
 ## Results
