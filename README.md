@@ -52,7 +52,7 @@ $$e = \begin{bmatrix} p_{target} - p_{hand} \\ \omega_{err} \end{bmatrix}, \qqua
 
 Orientation error comes from the quaternion difference, converted to a rotation vector:
 
-$$q_{err} = q_{target} \otimes q_{hand}^{-1} \;\rightarrow\; \omega_{err}$$
+$$q_{err} = q_{target} \otimes q_{hand}^{-1}  \quad \rightarrow \quad  \omega_{err}$$
 
 Joint angles are clamped to their limits after each step. The damping term $\lambda$ keeps the
 solve stable near singular poses. The arm is **redundant** (7 joints, 6 constraints), so many
@@ -102,7 +102,7 @@ The 5 mm gap is the cube's weight (not included in gravity compensation) plus sl
 Joint targets are blended with a smoothstep so the arm starts and stops with zero velocity
 (no jerk that could knock the cube):
 
-$$s(\tau) = 3\tau^2 - 2\tau^3, \qquad q(\tau) = q_{start} + s(\tau)\,(q_{goal} - q_{start}), \quad \tau \in [0, 1]$$
+$$s(\tau) = 3\tau^2 - 2\tau^3, \qquad q(\tau) = q_{start} + s(\tau) (q_{goal} - q_{start}), \quad \tau \in [0, 1]$$
 
 ## Challenges and How I Solved Them
 
