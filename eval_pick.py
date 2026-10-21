@@ -55,22 +55,28 @@ mujoco.mj_forward(model, data)
 q_home = data.qpos.copy()
 down_quat = data.xquat[hand_id].copy()
 
-def run_trial(cube_xy):
+def run_trial(cube_xy, yaw=0.0):
     mujoco.mj_resetDataKeyframe(model, data, 0)
     data.qpos[cube_adr:cube_adr + 3] = [cube_xy[0], cube_xy[1], 0.025]
-    data.qpos[cube_adr + 3:cube_adr + 7] = [1, 0, 0, 0]
+    data.qpos[cube_adr + 3:cube_adr + 7] = [np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
     data.qpos[0] = -1.5                       # observation pose
     mujoco.mj_forward(model, data)
     q_obs = data.qpos[:7].copy()
 
     xy = detect_cube()
     if xy is None:
-        return False, np.nan, 0.0
+        return False, np.nan, 0.0, np.nan
     det_err = np.hypot(*(xy - cube_xy)) * 1000
+    yaw_est = detect_yaw()
+    yaw_err = np.degrees((yaw_est - yaw + np.pi / 4) % (np.pi / 2) - np.pi / 4)
+    grasp_quat = down_quat.copy()
+    if ALIGN:
+        qz = np.array([np.cos(yaw_est / 2), 0, 0, np.sin(yaw_est / 2)])
+        mujoco.mju_mulQuat(grasp_quat, qz, down_quat)
 
-    q_above = solve_ik(np.array([xy[0], xy[1], 0.30]), down_quat, q_home)
+    q_above = solve_ik(np.array([xy[0], xy[1], 0.30]), grasp_quat, q_home)
     seed = q_home.copy(); seed[:7] = q_above
-    q_grasp = solve_ik(np.array([xy[0], xy[1], CUBE_TOP_Z / 2 + HAND_TO_TIP]), down_quat, seed)
+    q_grasp = solve_ik(np.array([xy[0], xy[1], CUBE_TOP_Z / 2 + HAND_TO_TIP]), grasp_quat, seed)
 
     plan = [(q_above, 255, 3.0), (q_grasp, 255, 2.0),
             (q_grasp, 0, 1.0), (q_above, 0, 2.0), (q_above, 0, 0.5)]
@@ -88,19 +94,38 @@ def run_trial(cube_xy):
         q_prev = q_tgt
 
     z = data.body("cube").xpos[2]
-    return z > 0.1, det_err, z
+    return z > 0.1, det_err, z, yaw_err
+
+def detect_yaw():
+    renderer.update_scene(data, camera="top_cam")
+    img = renderer.render()
+    r, g, b = (img[:, :, i].astype(int) for i in range(3))
+    mask = ((r > 150) & (r - g > 100) & (r - b > 100)).astype(np.uint8) * 255
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    _, _, angle = cv2.minAreaRect(max(contours, key=cv2.contourArea))
+    a = (angle + 45) % 90 - 45        # square: fold into [-45, 45) deg
+    return -np.radians(a)             # image rows point down -> flip sign
 
 rng = np.random.default_rng(0)
+import sys
+ROTATE = "--rotate" in sys.argv
+ALIGN = "--align" in sys.argv
+rng_yaw = np.random.default_rng(1)
 N = 50
 results = []
 for t in range(N):
     cube_xy = np.array([rng.uniform(0.35, 0.65), rng.uniform(-0.25, 0.25)])
-    ok, det_err, z = run_trial(cube_xy)
-    results.append((ok, det_err))
-    print(f"Trial {t+1:02d}: cube ({cube_xy[0]:.3f}, {cube_xy[1]:.3f})  "
-          f"detect err {det_err:5.2f} mm  final z {z:.3f}  {'OK' if ok else 'FAIL'}")
+    yaw = rng_yaw.uniform(-np.pi / 4, np.pi / 4) if ROTATE else 0.0
+    ok, det_err, z, yaw_err = run_trial(cube_xy, yaw)
+    results.append((ok, det_err, yaw_err, z))
+    print(f"Trial {t+1:02d}: yaw {np.degrees(yaw):+5.1f} deg  cube ({cube_xy[0]:.3f}, {cube_xy[1]:.3f})  "
+          f"yaw err {yaw_err:+5.2f} deg  detect err {det_err:5.2f} mm  final z {z:.3f}  {'OK' if ok else 'FAIL'}")
 
 oks = [r[0] for r in results]
 errs = np.array([r[1] for r in results])
 print(f"\nSuccess rate: {sum(oks)}/{N} = {100 * sum(oks) / N:.0f}%")
 print(f"Detection error: mean {np.nanmean(errs):.2f} mm, max {np.nanmax(errs):.2f} mm")
+yerr = np.abs(np.array([r[2] for r in results]))
+print(f"Yaw detection error: mean {np.nanmean(yerr):.2f} deg, max {np.nanmax(yerr):.2f} deg")
+zs = np.array([r[3] for r in results if r[0]])
+print(f"Final z (successful picks): mean {zs.mean():.3f} m, min {zs.min():.3f} m (ideal 0.197)")

@@ -12,6 +12,9 @@ Prototyped in Python; the IK solver is also implemented in **C++ (Eigen + MuJoCo
 | Metric | Result |
 |---|---|
 | Pick success, 50 random cube positions (no rotation) | **50/50 (100%)** |
+| Pick success, random position + rotation (±45°) | 98% → **100%** with gripper alignment |
+| Worst-case slip in the gripper (rotated cubes) | **33 mm → 3 mm** with gripper alignment |
+| Cube rotation detection error | mean 0.38°, max 2.57° |
 | Cube detection error | mean **1.56 mm**, max 2.61 mm (1 pixel ≈ 2.3 mm) |
 | IK accuracy | 0.031 mm position, 0.000043 rad orientation |
 | IK solve time (average of 1000) | **C++ 38.3 µs** vs Python 611 µs (16×) |
@@ -22,7 +25,7 @@ Test area: x = 0.35 to 0.65 m, y = −0.25 to 0.25 m, fixed random seed (`eval_p
 ## Pipeline
 
 1. **Observation pose:** rotate the base out of the camera's view.
-2. **Perception:** render the top camera, threshold red pixels, take the centroid, convert pixel → table (x, y).
+2. **Perception:** render the top camera, threshold red pixels, take the centroid, convert pixel → table (x, y), and measure the cube's rotation (`minAreaRect`).
 3. **Planning:** 6-DoF IK for a pre-grasp point (30 cm above) and a grasp point.
 4. **Control:** smooth joint-space interpolation, position actuators + gravity compensation.
 5. **Grasp:** descend → close gripper → lift.
@@ -104,6 +107,24 @@ Joint targets are blended with a smoothstep so the arm starts and stops with zer
 
 $$s(\tau) = 3\tau^2 - 2\tau^3, \qquad q(\tau) = q_{start} + s(\tau) (q_{goal} - q_{start}), \quad \tau \in [0, 1]$$
 
+### 7. Cube rotation and gripper alignment
+
+Width of a rotated cube measured across the fingers:
+
+$$w(\theta) = a\left(|\cos\theta| + |\sin\theta|\right)$$
+
+Worst case, $\theta = 45^\circ$: $w = 0.05 \times (0.707 + 0.707) = 0.0707$ m, which is less than the
+0.08 m open gripper. So the cube always fits, but the fingers close on its corners.
+
+A square looks the same every 90°, so the detected angle is folded into $[-45^\circ, 45^\circ)$.
+Image rows point down while world y points up, so $\theta_{world} = -\theta_{image}$.
+
+The grasp orientation is "pointing down" turned by $\theta$ about the world vertical axis:
+
+$$q_{grasp} = q_z(\theta) \otimes q_{down}, \qquad q_z(\theta) = \left(\cos\tfrac{\theta}{2},\ 0,\ 0,\ \sin\tfrac{\theta}{2}\right)$$
+
+Grip quality is measured as slip: $s = z_{ideal} - z_{final}$, with $z_{ideal} = 0.197$ m.
+
 ## Challenges and How I Solved Them
 
 **1. Cube invisible to the camera.** Two possible causes: the arm blocking the view, or the
@@ -129,10 +150,16 @@ from removing Python's per-call overhead; both call the same MuJoCo C library.
 **6. ARM laptop.** Developed on a Snapdragon (ARM64) laptop in WSL2 Ubuntu 24.04. Chose MuJoCo
 (CPU physics, ARM support) over Gazebo/Isaac Sim, and tested the 3D viewer before building on it.
 
+**7. Rotated cubes looked fine but weren't.** With random rotation and no gripper alignment, 49/50 picks
+still succeeded, so the success rate hid the problem. Tracking the final height showed the cube slipping
+up to 33 mm in the fingers (grabbed by its corners), and one fell out. After detecting the rotation and
+turning the gripper to match, slip dropped to 3 mm on every trial. Lesson: success rate alone can hide
+a bad grasp; measure grasp quality too.
+
 ## Limitations
 
 - Cube is red, of known size and height; camera is straight overhead.
-- Cube is never rotated (next step).
+- One object at a time, no clutter.
 - Simulation only; gravity compensation uses a perfect mass model.
 - The C++ IK is standalone and not yet called from the Python pipeline.
 
@@ -142,7 +169,7 @@ from removing Python's per-call overhead; both call the same MuJoCo C library.
 |---|---|
 | `scene.py` | Builds the scene: Panda + cube + top camera |
 | `pick_cube.py` | Full pipeline with the 3D viewer |
-| `eval_pick.py` | 50-trial success-rate evaluation |
+| `eval_pick.py` | 50-trial evaluation (`--rotate`: random cube rotation, `--align`: rotate gripper to match) |
 | `detect_cube.py` | Detection + pixel-to-world check |
 | `fk_test.py`, `ik_test.py`, `ik_move.py` | FK, position IK, 6-DoF IK + gravity compensation |
 | `ik_benchmark.py`, `cpp/` | Python vs C++ IK benchmark |
@@ -169,7 +196,6 @@ cd cpp && cmake -S . -B build && cmake --build build && ./build/ik
 
 ## Next Steps
 
-- Random cube rotation: detect orientation (OpenCV `minAreaRect`) and rotate the gripper to match.
 - Call the C++ IK from Python (pybind11).
 - Add sensor noise and clutter; try a depth camera.
 
