@@ -13,12 +13,13 @@ Repo: https://github.com/dochiphi/panda-pick-mujoco
 - scene.py: Panda + red 5 cm cube (freejoint) + top_cam (1.0 m above, fovy 60, 640x480).
 - eval_pick.py: importable pipeline + 50-trial eval. Flags: --rotate (random yaw ±45°), --align (rotate gripper). run_trial(cube_xy, yaw, on_step) returns (ok, det_err_mm, final_z, yaw_err_deg).
 - pick_cube.py: single pick with viewer. record_demo.py: renders demo.mp4 (+ demo.gif via ffmpeg).
-- cpp/ik.cpp: standalone C++ 6-DoF IK (damped least squares), verified identical to Python.
+- cpp/: IKSolver (ik.h/ik.cpp), test + benchmark exe (main.cpp), pybind11 module panda_ik (bindings.cpp, built into the project root). eval_pick.py --cpp uses it; results identical to Python.
 
 ## Pipeline facts
 - Observation pose: qpos[0] = -1.5 (arm out of camera view) before detecting.
 - Detection: relative red threshold (r>150, r-g>100, r-b>100), centroid, pinhole inverse (f = 415.7 px, Z = 0.95 m, 2.3 mm/pixel). Yaw via cv2.minAreaRect, folded to ±45°, sign flipped (image rows point down).
 - IK: damped least squares, lambda 0.01, 6-DoF (position + quaternion error), joint clamping.
+- IK must start from the home qpos (fingers open). Closed fingers create contacts in mj_forward: 58 vs 34 µs per solve.
 - Control: position actuators + gravity compensation (qfrc_applied[:7] = qfrc_bias[:7]), smoothstep blending.
 - Grasp hand height = 0.025 + 0.1034 = 0.128 m. Ideal lifted cube z = 0.197 m. Success = cube z > 0.1 m.
 

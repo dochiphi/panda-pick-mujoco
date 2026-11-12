@@ -3,7 +3,7 @@
 A full **perception → planning → control** pipeline for a 7-DoF robot arm in simulation:
 a top-down camera detects a cube, the pixel is converted to a table position, 6-DoF inverse
 kinematics plans the grasp, and a gravity-compensated position controller picks it up.
-Prototyped in Python; the IK solver is also implemented in **C++ (Eigen + MuJoCo C API)**.
+Prototyped in Python; the IK solver is also implemented in **C++ (Eigen + MuJoCo C API)** and called from the Python pipeline through **pybind11**.
 <p align="center">
   <img src="demo.gif" width="600">
 </p>
@@ -173,6 +173,12 @@ callback `mjcb_time`, so every `mj_forward` records internal timings. That costs
 With the timer off for both, the fair speedup is 14× and the real pybind11 call overhead is about 1.6 µs.
 This also corrected an earlier claim here (16×), which had compared Python with the timer on against C++
 with it off.
+
+**9. A refactor that made the C++ IK 70% slower.** Splitting the solver into a reusable class took it from
+34 µs to 58 µs per solve. Running the old and new versions back-to-back ruled out laptop noise. The cause: the
+new code set only the 7 arm joints, so the fingers started fully closed. Closed fingers touch, and `mj_forward`
+resolves those contacts on every IK iteration. Starting from the home pose (fingers open) brought it back to 34 µs.
+Lesson: a change that is irrelevant to the math (fingers don't move the hand) can still matter to the simulator.
 
 ## Limitations
 
