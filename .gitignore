@@ -2,3 +2,4 @@
 mujoco_menagerie/
 __pycache__/
 cpp/build/
+*.so

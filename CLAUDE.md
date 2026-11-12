@@ -25,7 +25,7 @@ Repo: https://github.com/dochiphi/panda-pick-mujoco
 ## Current results (baseline to beat or compare against)
 - No rotation: 50/50, detection error mean 1.56 mm, max 2.61 mm.
 - Rotation, no align: 49/50, worst slip 33 mm. Rotation + align: 50/50, slip 3 mm on every trial. Yaw error mean 0.38°, max 2.57°.
-- IK: C++ 38.3 µs vs Python 611 µs per solve (avg of 1000, fresh MjData each solve, same work).
+- IK, same process, timer off: C++ 35 µs vs Python 500 µs (14×); pybind11 overhead ≈ 1.6 µs. `import mujoco` sets mjcb_time, making mj_forward 3.5× slower (5.5 → 19.5 µs); compare under equal conditions.
 
 ## Rules for this project
 - Evaluations use fixed seeds (positions rng seed 0, yaw rng seed 1) so before/after runs are comparable.
@@ -35,5 +35,5 @@ Repo: https://github.com/dochiphi/panda-pick-mujoco
 - Never claim results that weren't measured.
 
 ## Next tasks
-1. pybind11: expose the C++ solve_ik to Python, verify it returns the same joint angles as the Python version, benchmark including the Python-to-C++ call overhead, then optionally use it in eval_pick.py.
+1. DONE: pybind11 module `panda_ik` (cpp/bindings.cpp), used via `eval_pick.py --cpp`, identical eval results.
 2. Harder tests: camera pixel noise, lighting changes, distractor objects (other colors), multiple cubes. For each: baseline, then fix, report success + slip + detection error.

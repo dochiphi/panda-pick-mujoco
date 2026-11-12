@@ -55,6 +55,19 @@ mujoco.mj_forward(model, data)
 q_home = data.qpos.copy()
 down_quat = data.xquat[hand_id].copy()
 
+USE_CPP = False
+_cpp_solver = None
+
+def ik(target_pos, target_quat, q_start):
+    """IK through C++ (pybind11) if USE_CPP, else the Python solve_ik."""
+    global _cpp_solver
+    if not USE_CPP:
+        return solve_ik(target_pos, target_quat, q_start)
+    if _cpp_solver is None:
+        import panda_ik
+        _cpp_solver = panda_ik.IKSolver("mujoco_menagerie/franka_emika_panda/scene.xml")
+    return _cpp_solver.solve(target_pos, target_quat, q_start[:7]).q
+
 def run_trial(cube_xy, yaw=0.0, on_step=None):
     mujoco.mj_resetDataKeyframe(model, data, 0)
     data.qpos[cube_adr:cube_adr + 3] = [cube_xy[0], cube_xy[1], 0.025]
@@ -74,9 +87,9 @@ def run_trial(cube_xy, yaw=0.0, on_step=None):
         qz = np.array([np.cos(yaw_est / 2), 0, 0, np.sin(yaw_est / 2)])
         mujoco.mju_mulQuat(grasp_quat, qz, down_quat)
 
-    q_above = solve_ik(np.array([xy[0], xy[1], 0.30]), grasp_quat, q_home)
+    q_above = ik(np.array([xy[0], xy[1], 0.30]), grasp_quat, q_home)
     seed = q_home.copy(); seed[:7] = q_above
-    q_grasp = solve_ik(np.array([xy[0], xy[1], CUBE_TOP_Z / 2 + HAND_TO_TIP]), grasp_quat, seed)
+    q_grasp = ik(np.array([xy[0], xy[1], CUBE_TOP_Z / 2 + HAND_TO_TIP]), grasp_quat, seed)
 
     plan = [(q_above, 255, 3.0), (q_grasp, 255, 2.0),
             (q_grasp, 0, 1.0), (q_above, 0, 2.0), (q_above, 0, 0.5)]
@@ -115,6 +128,7 @@ if __name__ == "__main__":
     import sys
     ROTATE = "--rotate" in sys.argv
     ALIGN = "--align" in sys.argv
+    USE_CPP = "--cpp" in sys.argv
     rng_yaw = np.random.default_rng(1)
     N = 50
     results = []

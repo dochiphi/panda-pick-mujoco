@@ -23,7 +23,8 @@ Prototyped in Python; the IK solver is also implemented in **C++ (Eigen + MuJoCo
 | Cube rotation detection error | mean 0.38°, max 2.57° |
 | Cube detection error | mean **1.56 mm**, max 2.61 mm (1 pixel ≈ 2.3 mm) |
 | IK accuracy | 0.031 mm position, 0.000043 rad orientation |
-| IK solve time (average of 1000) | **C++ 38.3 µs** vs Python 611 µs (16×) |
+| IK solve time, same process (avg of 1000) | **C++ 35 µs** vs Python 500 µs (**14×**); pybind11 call overhead ≈ 1.6 µs |
+| C++ IK inside the pipeline (pybind11) | identical results on all 50 evaluation trials |
 | Steady-state hand error | 5.6 mm → under 0.05 mm with gravity compensation |
 
 Test area: x = 0.35 to 0.65 m, y = −0.25 to 0.25 m, fixed random seed (`eval_pick.py`).
@@ -149,9 +150,11 @@ with gravity compensation.
 **4. A wrong success check.** The first pick was marked FAILED because I guessed a 0.2 m threshold.
 Computing the expected height (0.197 m) showed the pick had worked. Lesson: derive pass criteria, don't guess them.
 
-**5. Fair benchmarking.** A single C++ run (42.9 µs) isn't reliable. Both versions were averaged over
-1000 solves and do identical work, including creating a fresh simulation state each solve. The 16× comes
-from removing Python's per-call overhead; both call the same MuJoCo C library.
+**5. Fair benchmarking.** A single run isn't reliable, so every timing is an average of 1000 solves, both
+versions do identical work (fresh simulation state each solve), and comparisons run back-to-back in the same
+session. A refactor once made the C++ solver 70% slower (34 → 58 µs): each solve started with the fingers
+closed, which created finger contacts that `mj_forward` had to resolve. Starting from the home pose
+(fingers open) fixed it.
 
 **6. ARM laptop.** Developed on a Snapdragon (ARM64) laptop in WSL2 Ubuntu 24.04. Chose MuJoCo
 (CPU physics, ARM support) over Gazebo/Isaac Sim, and tested the 3D viewer before building on it.
@@ -162,12 +165,21 @@ up to 33 mm in the fingers (grabbed by its corners), and one fell out. After det
 turning the gripper to match, slip dropped to 3 mm on every trial. Lesson: success rate alone can hide
 a bad grasp; measure grasp quality too.
 
+**8. A "71 µs pybind11 overhead" that wasn't.** Called from Python, the C++ IK took 105 µs vs 34 µs
+standalone. I ruled out causes one at a time by testing: a slower copy of the MuJoCo library, memory
+allocation, and plugin registration. The real cause: importing Python's `mujoco` sets the global timer
+callback `mjcb_time`, so every `mj_forward` records internal timings. That costs 5.5 → 19.5 µs per call
+(3.5×), × 5 calls per solve ≈ 70 µs. Proven by clearing it (back to 5.5 µs) and restoring it (slow again).
+With the timer off for both, the fair speedup is 14× and the real pybind11 call overhead is about 1.6 µs.
+This also corrected an earlier claim here (16×), which had compared Python with the timer on against C++
+with it off.
+
 ## Limitations
 
 - Cube is red, of known size and height; camera is straight overhead.
 - One object at a time, no clutter.
 - Simulation only; gravity compensation uses a perfect mass model.
-- The C++ IK is standalone and not yet called from the Python pipeline.
+- `mjcb_time` is left on in the pipeline; clearing it is process-wide and disables MuJoCo's internal profiling timers.
 
 ## Project Structure
 
@@ -175,10 +187,12 @@ a bad grasp; measure grasp quality too.
 |---|---|
 | `scene.py` | Builds the scene: Panda + cube + top camera |
 | `pick_cube.py` | Full pipeline with the 3D viewer |
-| `eval_pick.py` | 50-trial evaluation (`--rotate`: random cube rotation, `--align`: rotate gripper to match) |
+| `eval_pick.py` | 50-trial evaluation (`--rotate`: random cube rotation, `--align`: rotate gripper to match, `--cpp`: C++ IK) |
 | `detect_cube.py` | Detection + pixel-to-world check |
 | `fk_test.py`, `ik_test.py`, `ik_move.py` | FK, position IK, 6-DoF IK + gravity compensation |
-| `ik_benchmark.py`, `cpp/` | Python vs C++ IK benchmark |
+| `cpp/` | C++ IK solver (`ik.h`, `ik.cpp`), standalone benchmark (`main.cpp`), pybind11 module (`bindings.cpp`) |
+| `test_binding.py`, `bench_binding.py` | C++ vs Python IK: same-answer check and same-process benchmark |
+| `ik_benchmark.py` | Original Python IK benchmark |
 | `inspect_arm.py`, `move_arm.py`, `test_viewer.py` | Setup and first control tests |
 | `check_color.py`, `debug_cube.py` | Debugging tools from Challenges 1 and 2 |
 
@@ -194,15 +208,19 @@ python pick_cube.py      # watch one pick
 python eval_pick.py      # 50-trial evaluation
 ```
 
-C++ IK (needs the MuJoCo C library in `~/libs/mujoco-3.16.0` and `libeigen3-dev`):
+C++ IK and Python module (needs the MuJoCo C library in `~/libs/mujoco-3.16.0`, `libeigen3-dev`, `python3-dev`):
 
-```bash
-cd cpp && cmake -S . -B build && cmake --build build && ./build/ik
+````bash
+cmake -S cpp -B cpp/build -Dpybind11_DIR=$(python -m pybind11 --cmakedir) \
+      -DPython_EXECUTABLE=$(which python) -DPYBIND11_FINDPYTHON=ON
+cmake --build cpp/build                       # builds cpp/build/ik and panda_ik*.so (project root)
+./cpp/build/ik                                # standalone C++ benchmark
+python eval_pick.py --rotate --align --cpp    # pipeline using the C++ IK
 ```
 
 ## Next Steps
 
-- Call the C++ IK from Python (pybind11).
+- Use `mj_kinematics` + `mj_comPos` instead of `mj_forward` inside IK (IK needs no collisions or dynamics).
 - Add sensor noise and clutter; try a depth camera.
 
 ---
