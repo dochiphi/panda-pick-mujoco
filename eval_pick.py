@@ -55,7 +55,7 @@ mujoco.mj_forward(model, data)
 q_home = data.qpos.copy()
 down_quat = data.xquat[hand_id].copy()
 
-def run_trial(cube_xy, yaw=0.0):
+def run_trial(cube_xy, yaw=0.0, on_step=None):
     mujoco.mj_resetDataKeyframe(model, data, 0)
     data.qpos[cube_adr:cube_adr + 3] = [cube_xy[0], cube_xy[1], 0.025]
     data.qpos[cube_adr + 3:cube_adr + 7] = [np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
@@ -91,6 +91,8 @@ def run_trial(cube_xy, yaw=0.0):
             data.ctrl[7] = grip
             data.qfrc_applied[:7] = data.qfrc_bias[:7]
             mujoco.mj_step(model, data)
+            if on_step:
+                on_step()
         q_prev = q_tgt
 
     z = data.body("cube").xpos[2]
@@ -106,26 +108,29 @@ def detect_yaw():
     a = (angle + 45) % 90 - 45        # square: fold into [-45, 45) deg
     return -np.radians(a)             # image rows point down -> flip sign
 
-rng = np.random.default_rng(0)
-import sys
-ROTATE = "--rotate" in sys.argv
-ALIGN = "--align" in sys.argv
-rng_yaw = np.random.default_rng(1)
-N = 50
-results = []
-for t in range(N):
-    cube_xy = np.array([rng.uniform(0.35, 0.65), rng.uniform(-0.25, 0.25)])
-    yaw = rng_yaw.uniform(-np.pi / 4, np.pi / 4) if ROTATE else 0.0
-    ok, det_err, z, yaw_err = run_trial(cube_xy, yaw)
-    results.append((ok, det_err, yaw_err, z))
-    print(f"Trial {t+1:02d}: yaw {np.degrees(yaw):+5.1f} deg  cube ({cube_xy[0]:.3f}, {cube_xy[1]:.3f})  "
-          f"yaw err {yaw_err:+5.2f} deg  detect err {det_err:5.2f} mm  final z {z:.3f}  {'OK' if ok else 'FAIL'}")
+ALIGN = False
 
-oks = [r[0] for r in results]
-errs = np.array([r[1] for r in results])
-print(f"\nSuccess rate: {sum(oks)}/{N} = {100 * sum(oks) / N:.0f}%")
-print(f"Detection error: mean {np.nanmean(errs):.2f} mm, max {np.nanmax(errs):.2f} mm")
-yerr = np.abs(np.array([r[2] for r in results]))
-print(f"Yaw detection error: mean {np.nanmean(yerr):.2f} deg, max {np.nanmax(yerr):.2f} deg")
-zs = np.array([r[3] for r in results if r[0]])
-print(f"Final z (successful picks): mean {zs.mean():.3f} m, min {zs.min():.3f} m (ideal 0.197)")
+if __name__ == "__main__":
+    rng = np.random.default_rng(0)
+    import sys
+    ROTATE = "--rotate" in sys.argv
+    ALIGN = "--align" in sys.argv
+    rng_yaw = np.random.default_rng(1)
+    N = 50
+    results = []
+    for t in range(N):
+        cube_xy = np.array([rng.uniform(0.35, 0.65), rng.uniform(-0.25, 0.25)])
+        yaw = rng_yaw.uniform(-np.pi / 4, np.pi / 4) if ROTATE else 0.0
+        ok, det_err, z, yaw_err = run_trial(cube_xy, yaw)
+        results.append((ok, det_err, yaw_err, z))
+        print(f"Trial {t+1:02d}: yaw {np.degrees(yaw):+5.1f} deg  cube ({cube_xy[0]:.3f}, {cube_xy[1]:.3f})  "
+              f"yaw err {yaw_err:+5.2f} deg  detect err {det_err:5.2f} mm  final z {z:.3f}  {'OK' if ok else 'FAIL'}")
+
+    oks = [r[0] for r in results]
+    errs = np.array([r[1] for r in results])
+    print(f"\nSuccess rate: {sum(oks)}/{N} = {100 * sum(oks) / N:.0f}%")
+    print(f"Detection error: mean {np.nanmean(errs):.2f} mm, max {np.nanmax(errs):.2f} mm")
+    yerr = np.abs(np.array([r[2] for r in results]))
+    print(f"Yaw detection error: mean {np.nanmean(yerr):.2f} deg, max {np.nanmax(yerr):.2f} deg")
+    zs = np.array([r[3] for r in results if r[0]])
+    print(f"Final z (successful picks): mean {zs.mean():.3f} m, min {zs.min():.3f} m (ideal 0.197)")
