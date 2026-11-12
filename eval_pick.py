@@ -15,12 +15,37 @@ cube_adr = model.jnt_qposadr[model.body("cube").jntadr[0]]
 renderer = mujoco.Renderer(model, height=H, width=W)
 dt = model.opt.timestep
 
+NOISE_SIGMA = 0.0
+_rng_noise = np.random.default_rng(2)
+
+def add_noise(img):
+    """Gaussian pixel noise (std NOISE_SIGMA, brightness units 0-255)."""
+    if NOISE_SIGMA <= 0:
+        return img
+    noisy = img.astype(np.float32) + _rng_noise.normal(0, NOISE_SIGMA, img.shape)
+    return np.clip(noisy, 0, 255).astype(np.uint8)
+
+USE_BLUR = True
+USE_LARGEST = True
+
+def red_mask(img):
+    """Pixels that are clearly red. Optional blur first to reduce noise."""
+    if USE_BLUR:
+        img = cv2.GaussianBlur(img, (5, 5), 0)
+    r, g, b = (img[:, :, i].astype(int) for i in range(3))
+    return ((r > 150) & (r - g > 100) & (r - b > 100)).astype(np.uint8) * 255
+
 def detect_cube():
     renderer.update_scene(data, camera="top_cam")
-    img = renderer.render()
-    r, g, b = (img[:, :, i].astype(int) for i in range(3))
-    mask = ((r > 150) & (r - g > 100) & (r - b > 100)).astype(np.uint8) * 255
-    m = cv2.moments(mask)
+    img = add_noise(renderer.render())
+    mask = red_mask(img)
+    if USE_LARGEST:
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+        m = cv2.moments(max(contours, key=cv2.contourArea))
+    else:
+        m = cv2.moments(mask)
     if m["m00"] == 0:
         return None
     u, v = m["m10"] / m["m00"], m["m01"] / m["m00"]
@@ -113,9 +138,8 @@ def run_trial(cube_xy, yaw=0.0, on_step=None):
 
 def detect_yaw():
     renderer.update_scene(data, camera="top_cam")
-    img = renderer.render()
-    r, g, b = (img[:, :, i].astype(int) for i in range(3))
-    mask = ((r > 150) & (r - g > 100) & (r - b > 100)).astype(np.uint8) * 255
+    img = add_noise(renderer.render())
+    mask = red_mask(img)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     _, _, angle = cv2.minAreaRect(max(contours, key=cv2.contourArea))
     a = (angle + 45) % 90 - 45        # square: fold into [-45, 45) deg
@@ -129,6 +153,10 @@ if __name__ == "__main__":
     ROTATE = "--rotate" in sys.argv
     ALIGN = "--align" in sys.argv
     USE_CPP = "--cpp" in sys.argv
+    if "--noise" in sys.argv:
+        NOISE_SIGMA = float(sys.argv[sys.argv.index("--noise") + 1])
+    USE_BLUR = "--no-blur" not in sys.argv
+    USE_LARGEST = "--no-largest" not in sys.argv
     rng_yaw = np.random.default_rng(1)
     N = 50
     results = []
@@ -147,4 +175,7 @@ if __name__ == "__main__":
     yerr = np.abs(np.array([r[2] for r in results]))
     print(f"Yaw detection error: mean {np.nanmean(yerr):.2f} deg, max {np.nanmax(yerr):.2f} deg")
     zs = np.array([r[3] for r in results if r[0]])
-    print(f"Final z (successful picks): mean {zs.mean():.3f} m, min {zs.min():.3f} m (ideal 0.197)")
+    if zs.size:
+        print(f"Final z (successful picks): mean {zs.mean():.3f} m, min {zs.min():.3f} m (ideal 0.197)")
+    else:
+        print("Final z: no successful picks")
