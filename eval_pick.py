@@ -153,6 +153,44 @@ def sample_cube2_at(rng, cube_xy, yaw, d):
     ang = yaw + LAST_K * np.pi / 2
     return (cube_xy[0] + d * np.cos(ang), cube_xy[1] + d * np.sin(ang), yaw)
 
+GRASP_CHECK = True
+_d0 = mujoco.MjData(model)
+mujoco.mj_resetDataKeyframe(model, _d0, 0)
+mujoco.mj_forward(model, _d0)
+_ax = _d0.xaxis[model.joint("finger_joint1").id]
+FINGER_PHI0 = np.arctan2(_ax[1], _ax[0])   # finger axis angle at grasp yaw 0 (arctan with quadrant check)
+
+def world_to_pixel(x, y, z_top=CUBE_TOP_Z):
+    f = (H / 2) / np.tan(np.radians(FOVY / 2))
+    Z = CAM_POS[2] - z_top
+    return W / 2 + f * (x - CAM_POS[0]) / Z, H / 2 - f * (y - CAM_POS[1]) / Z
+
+def finger_zone_blocked(depth, xy, phi):
+    """Occupied sample points in the two finger landing zones (2 x 2 cm, 5 cm from center)."""
+    axis = np.array([np.cos(phi), np.sin(phi)])
+    perp = np.array([-axis[1], axis[0]])
+    count = 0
+    for side in (-1, 1):
+        center = xy + side * 0.05 * axis
+        for a in np.linspace(-0.01, 0.01, 5):
+            for b in np.linspace(-0.01, 0.01, 5):
+                p = center + a * axis + b * perp
+                u, v = world_to_pixel(p[0], p[1])
+                ui, vi = int(round(u)), int(round(v))
+                if 0 <= vi < H and 0 <= ui < W and depth[vi, ui] < CAM_POS[2] - 0.01:
+                    count += 1
+    return count
+
+def choose_grasp_yaw(xy, yaw_est):
+    """Of the two square-cube grasps (yaw, yaw + 90 deg), pick the one with clearer finger zones."""
+    renderer.enable_depth_rendering()
+    renderer.update_scene(data, camera="top_cam")
+    depth = renderer.render()
+    renderer.disable_depth_rendering()
+    options = [yaw_est, yaw_est + np.pi / 2]
+    scores = [finger_zone_blocked(depth, xy, y + FINGER_PHI0) for y in options]
+    return options[int(np.argmin(scores))], scores
+
 def run_trial(cube_xy, yaw=0.0, on_step=None, distractor_xy=None, cube2=None):
     mujoco.mj_resetDataKeyframe(model, data, 0)
     data.qpos[cube_adr:cube_adr + 3] = [cube_xy[0], cube_xy[1], 0.025]
@@ -178,6 +216,8 @@ def run_trial(cube_xy, yaw=0.0, on_step=None, distractor_xy=None, cube2=None):
     det_err = min(dists) * 1000
     yaw_est = detect_yaw()
     yaw_err = np.degrees((yaw_est - true_yaw + np.pi / 4) % (np.pi / 2) - np.pi / 4)
+    if GRASP_CHECK:
+        yaw_est, _ = choose_grasp_yaw(xy, yaw_est)
     grasp_quat = down_quat.copy()
     if ALIGN:
         qz = np.array([np.cos(yaw_est / 2), 0, 0, np.sin(yaw_est / 2)])
@@ -224,6 +264,7 @@ if __name__ == "__main__":
     ROTATE = "--rotate" in sys.argv
     DISTRACT = "--distract" in sys.argv
     TWO_RED = "--two-red" in sys.argv
+    GRASP_CHECK = "--no-grasp-check" not in sys.argv
     MIN2 = float(sys.argv[sys.argv.index("--two-red-min") + 1]) if "--two-red-min" in sys.argv else 0.10
     rng_red2 = np.random.default_rng(4)
     D2 = float(sys.argv[sys.argv.index("--two-red-at") + 1]) if "--two-red-at" in sys.argv else None
