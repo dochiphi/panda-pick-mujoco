@@ -12,6 +12,9 @@ model = build_model()
 data = mujoco.MjData(model)
 hand_id = model.body("hand").id
 cube_adr = model.jnt_qposadr[model.body("cube").jntadr[0]]
+from scene import DISTRACTORS
+cube2_adr = model.jnt_qposadr[model.body("cube2").jntadr[0]]
+dist_adrs = [model.jnt_qposadr[model.body(f"distractor_{n}").jntadr[0]] for n, _ in DISTRACTORS]
 renderer = mujoco.Renderer(model, height=H, width=W)
 dt = model.opt.timestep
 
@@ -127,10 +130,39 @@ def ik(target_pos, target_quat, q_start):
         _cpp_solver = panda_ik.IKSolver("mujoco_menagerie/franka_emika_panda/scene.xml")
     return _cpp_solver.solve(target_pos, target_quat, q_start[:7]).q
 
-def run_trial(cube_xy, yaw=0.0, on_step=None):
+def sample_distractors(rng, cube_xy, n=3, min_dist=0.10):
+    """Random distractor spots, at least min_dist from the cube and each other."""
+    pts = [np.asarray(cube_xy)]
+    while len(pts) < n + 1:
+        p = np.array([rng.uniform(0.35, 0.65), rng.uniform(-0.25, 0.25)])
+        if all(np.hypot(*(p - q)) >= min_dist for q in pts):
+            pts.append(p)
+    return pts[1:]
+
+def sample_cube2(rng, cube_xy, min_dist):
+    """Second red cube: random spot at least min_dist from the first, random yaw."""
+    x, y = sample_distractors(rng, cube_xy, n=1, min_dist=min_dist)[0]
+    return (x, y, rng.uniform(-np.pi / 4, np.pi / 4))
+
+LAST_K = None
+
+def sample_cube2_at(rng, cube_xy, yaw, d):
+    """Second red cube at exact center distance d, same yaw, side-to-side (gap = d - 0.05)."""
+    global LAST_K
+    LAST_K = int(rng.integers(4))
+    ang = yaw + LAST_K * np.pi / 2
+    return (cube_xy[0] + d * np.cos(ang), cube_xy[1] + d * np.sin(ang), yaw)
+
+def run_trial(cube_xy, yaw=0.0, on_step=None, distractor_xy=None, cube2=None):
     mujoco.mj_resetDataKeyframe(model, data, 0)
     data.qpos[cube_adr:cube_adr + 3] = [cube_xy[0], cube_xy[1], 0.025]
     data.qpos[cube_adr + 3:cube_adr + 7] = [np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
+    if distractor_xy is not None:
+        for adr, (dx, dy) in zip(dist_adrs, distractor_xy):
+            data.qpos[adr:adr + 7] = [dx, dy, 0.025, 1, 0, 0, 0]
+    if cube2 is not None:
+        x2, y2, yaw2 = cube2
+        data.qpos[cube2_adr:cube2_adr + 7] = [x2, y2, 0.025, np.cos(yaw2 / 2), 0, 0, np.sin(yaw2 / 2)]
     data.qpos[0] = -1.5                       # observation pose
     mujoco.mj_forward(model, data)
     q_obs = data.qpos[:7].copy()
@@ -138,9 +170,14 @@ def run_trial(cube_xy, yaw=0.0, on_step=None):
     xy = detect_cube()
     if xy is None:
         return False, np.nan, 0.0, np.nan
-    det_err = np.hypot(*(xy - cube_xy)) * 1000
+    targets = [(np.asarray(cube_xy), yaw)]
+    if cube2 is not None:
+        targets.append((np.array(cube2[:2]), cube2[2]))
+    dists = [np.hypot(*(xy - t)) for t, _ in targets]
+    true_yaw = targets[int(np.argmin(dists))][1]
+    det_err = min(dists) * 1000
     yaw_est = detect_yaw()
-    yaw_err = np.degrees((yaw_est - yaw + np.pi / 4) % (np.pi / 2) - np.pi / 4)
+    yaw_err = np.degrees((yaw_est - true_yaw + np.pi / 4) % (np.pi / 2) - np.pi / 4)
     grasp_quat = down_quat.copy()
     if ALIGN:
         qz = np.array([np.cos(yaw_est / 2), 0, 0, np.sin(yaw_est / 2)])
@@ -167,7 +204,7 @@ def run_trial(cube_xy, yaw=0.0, on_step=None):
                 on_step()
         q_prev = q_tgt
 
-    z = data.body("cube").xpos[2]
+    z = max(data.body("cube").xpos[2], data.body("cube2").xpos[2])
     return z > 0.1, det_err, z, yaw_err
 
 def detect_yaw():
@@ -185,6 +222,12 @@ if __name__ == "__main__":
     rng = np.random.default_rng(0)
     import sys
     ROTATE = "--rotate" in sys.argv
+    DISTRACT = "--distract" in sys.argv
+    TWO_RED = "--two-red" in sys.argv
+    MIN2 = float(sys.argv[sys.argv.index("--two-red-min") + 1]) if "--two-red-min" in sys.argv else 0.10
+    rng_red2 = np.random.default_rng(4)
+    D2 = float(sys.argv[sys.argv.index("--two-red-at") + 1]) if "--two-red-at" in sys.argv else None
+    rng_dist = np.random.default_rng(3)
     ALIGN = "--align" in sys.argv
     USE_CPP = "--cpp" in sys.argv
     if "--noise" in sys.argv:
@@ -204,10 +247,10 @@ if __name__ == "__main__":
     for t in range(N):
         cube_xy = np.array([rng.uniform(0.35, 0.65), rng.uniform(-0.25, 0.25)])
         yaw = rng_yaw.uniform(-np.pi / 4, np.pi / 4) if ROTATE else 0.0
-        ok, det_err, z, yaw_err = run_trial(cube_xy, yaw)
+        ok, det_err, z, yaw_err = run_trial(cube_xy, yaw, distractor_xy=sample_distractors(rng_dist, cube_xy) if DISTRACT else None, cube2=(sample_cube2(rng_red2, cube_xy, MIN2) if TWO_RED else sample_cube2_at(rng_red2, cube_xy, yaw, D2) if D2 else None))
         results.append((ok, det_err, yaw_err, z))
         print(f"Trial {t+1:02d}: yaw {np.degrees(yaw):+5.1f} deg  cube ({cube_xy[0]:.3f}, {cube_xy[1]:.3f})  "
-              f"yaw err {yaw_err:+5.2f} deg  detect err {det_err:5.2f} mm  final z {z:.3f}  {'OK' if ok else 'FAIL'}")
+              f"yaw err {yaw_err:+5.2f} deg  detect err {det_err:5.2f} mm  final z {z:.3f}  {'OK' if ok else 'FAIL'}  dir {LAST_K}")
 
     oks = [r[0] for r in results]
     errs = np.array([r[1] for r in results])
