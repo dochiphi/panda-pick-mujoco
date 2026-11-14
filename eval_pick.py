@@ -27,13 +27,47 @@ def add_noise(img):
 
 USE_BLUR = True
 USE_LARGEST = True
+USE_HSV = True
 
-def red_mask(img):
+def _red_mask_raw(img):
     """Pixels that are clearly red. Optional blur first to reduce noise."""
     if USE_BLUR:
         img = cv2.GaussianBlur(img, (5, 5), 0)
+    if USE_HSV:
+        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+        h, s, v = (hsv[:, :, i].astype(int) for i in range(3))
+        return (((h <= 10) | (h >= 170)) & (s > 64) & (v > 50)).astype(np.uint8) * 255
     r, g, b = (img[:, :, i].astype(int) for i in range(3))
     return ((r > 150) & (r - g > 100) & (r - b > 100)).astype(np.uint8) * 255
+
+_light_diffuse0 = model.light_diffuse.copy()
+_light_ambient0 = model.light_ambient.copy()
+_head_diffuse0 = model.vis.headlight.diffuse.copy()
+_head_ambient0 = model.vis.headlight.ambient.copy()
+
+def apply_light(k):
+    """Scale all scene lights (and the headlight) by k. k = 1 is the original."""
+    model.light_diffuse[:] = _light_diffuse0 * k
+    model.light_ambient[:] = _light_ambient0 * k
+    model.vis.headlight.diffuse[:] = _head_diffuse0 * k
+    model.vis.headlight.ambient[:] = _head_ambient0 * k
+
+TOPFACE_MODE = "v"    # None, "v" (max of RGB) or "l" (average of RGB)
+
+def red_mask(img):
+    """Red pixels; with TOPFACE_MODE, keep only the brightest part (the top face)."""
+    mask = _red_mask_raw(img)
+    if TOPFACE_MODE is None:
+        return mask
+    if USE_BLUR:
+        img = cv2.GaussianBlur(img, (5, 5), 0)
+    f = img.astype(float)
+    bright = f.max(axis=2) if TOPFACE_MODE == "v" else f.mean(axis=2)
+    sel = mask > 0
+    if not sel.any():
+        return mask
+    ref = np.percentile(bright[sel], 95)
+    return (sel & (bright >= 0.85 * ref)).astype(np.uint8) * 255
 
 def detect_cube():
     renderer.update_scene(data, camera="top_cam")
@@ -157,6 +191,13 @@ if __name__ == "__main__":
         NOISE_SIGMA = float(sys.argv[sys.argv.index("--noise") + 1])
     USE_BLUR = "--no-blur" not in sys.argv
     USE_LARGEST = "--no-largest" not in sys.argv
+    USE_HSV = "--rgb" not in sys.argv
+    if "--topface" in sys.argv:
+        TOPFACE_MODE = sys.argv[sys.argv.index("--topface") + 1]
+        if TOPFACE_MODE == "none":
+            TOPFACE_MODE = None
+    if "--light" in sys.argv:
+        apply_light(float(sys.argv[sys.argv.index("--light") + 1]))
     rng_yaw = np.random.default_rng(1)
     N = 50
     results = []
