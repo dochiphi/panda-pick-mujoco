@@ -28,6 +28,16 @@ Repo: https://github.com/dochiphi/panda-pick-mujoco
 - Rotation, no align: 49/50, worst slip 33 mm. Rotation + align: 50/50, slip 3 mm on every trial. Yaw error mean 0.38°, max 2.57°.
 - IK, same process, timer off: C++ 35 µs vs Python 500 µs (14×); pybind11 overhead ≈ 1.6 µs. `import mujoco` sets mjcb_time, making mj_forward 3.5× slower (5.5 → 19.5 µs); compare under equal conditions.
 
+## Robustness (harder tests, done)
+- Detector defaults: HSV red test, 5x5 blur, largest red region, top-face filter (V >= 0.85 x 95th pct), depth-based
+  grasp selection (two 90-degree options, pick the clear finger zones). Off switches: --rgb, --no-blur,
+  --no-largest, --topface none, --no-grasp-check. Test flags: --noise S, --light K, --distract, --two-red,
+  --two-red-at D.
+- Full results: run_all_tests.py -> results.md (original vs current). Use these numbers in docs, not older runs;
+  scene changes shift results ~0.04 mm.
+- Known: bright light x2.5 has ~19 mm outliers (cause unknown); 2 mm cube gap 96% (likely region merge).
+- Always chain patch && test, and confirm a new flag changes the output before trusting results.
+
 ## Rules for this project
 - Evaluations use fixed seeds (positions rng seed 0, yaw rng seed 1) so before/after runs are comparable.
 - Always measure a baseline before a fix, and report grasp quality (slip = 0.197 - final z), not just success rate.
@@ -37,4 +47,4 @@ Repo: https://github.com/dochiphi/panda-pick-mujoco
 
 ## Next tasks
 1. DONE: pybind11 module `panda_ik` (cpp/bindings.cpp), used via `eval_pick.py --cpp`, identical eval results.
-2. Harder tests: camera pixel noise, lighting changes, distractor objects (other colors), multiple cubes. For each: baseline, then fix, report success + slip + detection error.
+2. Done: harder tests (see Robustness section above and results.md).

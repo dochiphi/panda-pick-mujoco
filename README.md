@@ -37,6 +37,32 @@ Test area: x = 0.35 to 0.65 m, y = −0.25 to 0.25 m, fixed random seed (`eval_p
 4. **Control:** smooth joint-space interpolation, position actuators + gravity compensation.
 5. **Grasp:** descend → close gripper → lift.
 
+## Robustness Tests
+
+The first detector worked perfectly under ideal conditions, so I added realistic problems on purpose
+to find where it breaks, then fixed each one and measured again. Each test is 50 trials with random cube
+position and rotation, same seeds for every run. **Original** = fixed RGB color thresholds, average of all
+red pixels, no grasp check. **Current** = HSV red test, blur, largest red region, top-face filter, and
+depth-based grasp selection. Reproduce with `python run_all_tests.py` (writes `results.md`).
+
+Results from commit `f521303`: 50 trials each, random position and rotation, fixed seeds.
+Detection error is mean / max. Original = RGB thresholds, no blur, whole-image average, no grasp check.
+
+| Test | Original: success | Original: detection error | Current: success | Current: detection error |
+|---|---|---|---|---|
+| Normal conditions | 100% | 1.61 / 2.28 mm | 100% | 1.63 / 2.30 mm |
+| Camera noise, sigma = 40 | 2% | 58.43 / 85.77 mm | 100% | 1.66 / 2.29 mm |
+| Camera noise, sigma = 60 | 0% | 150.56 / 241.43 mm | 100% | 1.70 / 2.53 mm |
+| Dim light (x0.2) | 0% | cube not found | 100% | 1.71 / 2.17 mm |
+| Bright light (x2.5) | 56% | 18.28 / 29.14 mm | 100% | 3.33 / 18.94 mm |
+| Blue / green / orange distractors | 100% | 1.62 / 2.28 mm | 100% | 1.63 / 2.26 mm |
+| Second red cube, >= 10 cm away | 0% | 116.34 / 226.18 mm | 100% | 1.62 / 2.02 mm |
+| Second red cube, 10 mm gap | 0% | 28.93 / 29.96 mm | 100% | 1.62 / 2.30 mm |
+| Second red cube, 2 mm gap | 0% | 24.91 / 26.00 mm | 96% | 2.55 / 24.79 mm |
+
+Under ideal conditions the two are equally accurate (1.61 vs 1.63 mm). The gain is robustness: the current
+method keeps working in every case where the original fails.
+
 ## The Math
 
 ### 1. Forward kinematics check
@@ -180,7 +206,40 @@ new code set only the 7 arm joints, so the fingers started fully closed. Closed 
 resolves those contacts on every IK iteration. Starting from the home pose (fingers open) brought it back to 34 µs.
 Lesson: a change that is irrelevant to the math (fingers don't move the hand) can still matter to the simulator.
 
+**10. Camera noise broke the cube center.** The center was the average of every red pixel in the image, so
+noise that turned a few floor pixels red pulled it off target: σ = 40 gave 2% success and 58 mm error. I tested
+two fixes separately (an ablation). Using only the largest red region fixed success but its error grew to 8.25 mm
+max at σ = 60, because noise still frays the cube's outline. A 5 × 5 blur before the color test kept the error flat
+(about 1.7 mm) because it removes noise before the test. I kept both, since the largest region matters later.
+
+**11. Lighting showed my color test was really a brightness test.** At 0.2× light the cube rendered as
+RGB (136, 55, 55) and failed `r > 150`; at 2.5× the top face washed to (255, 172, 172) and failed `r − g > 100`
+while the darker sides still passed, putting the center 18 mm off. Switching to HSV (hue = which color,
+saturation = how strong) fixed dim light, but **doubled** the error at normal light. Pixel counts showed why:
+off-center cubes gained about 100 red pixels, matching the predicted visible side faces
+(21.9 px × 5.9 px ≈ 129 px). Side faces sit lower than the top but get projected as if at top height, pulling
+the center inward. Keeping only the brightest part of the red region (V ≥ 0.85 × its 95th percentile, i.e. the
+top face, lit from above) restored accuracy. Along the way, a patch silently failed and a flag was ignored,
+so "HSV + top face" first gave numbers identical to plain HSV. Lesson: when a fix changes nothing at all,
+check that it ran.
+
+**12. Distractors were easier than intended.** I chose a red-orange meant to sit near the red hue limit, but
+the lighting rendered it as RGB (255, 233, 49), hue 27 vs a red window of ≤ 10, so zero of its pixels passed.
+The honest claim is "blue, green and orange cubes are rejected," not "robust to look-alike colors."
+
+**13. Two identical red cubes.** No color rule can separate them. Averaging all red pixels aimed between the
+cubes (116 mm off); the largest region picks one. With cubes almost touching, detection held down to a 5 mm
+gap, but success fell to 76% at a 10 mm gap. Logging which side the neighbor was on showed all failures
+(12 of 23) had it along the finger direction and none (0 of 27) had it sideways: a finger landed on the
+neighbor. Fix: a square cube can be grasped two ways (90° apart), so a depth image checks both finger landing
+zones and picks the clear one. Success at a 10 mm gap went from 76% to 100%. At a 2 mm gap it is 96%; the
+remaining failures are likely the two cubes merging into one region in the image.
+
 ## Limitations
+- Bright light (2.5×): a few trials are still about 19 mm off; I haven't found the cause.
+- Blur slightly worsens the rotation estimate (max 4.2° vs 2.6°), with no effect on grasp quality.
+- Changing what is in the scene shifts results by about 0.04 mm (likely rendering); all reported
+  robustness numbers come from one run of `run_all_tests.py` on one commit.
 
 - Cube is red, of known size and height; camera is straight overhead.
 - One object at a time, no clutter.
@@ -193,6 +252,8 @@ Lesson: a change that is irrelevant to the math (fingers don't move the hand) ca
 |---|---|
 | `scene.py` | Builds the scene: Panda + cube + top camera |
 | `pick_cube.py` | Full pipeline with the 3D viewer |
+| `run_all_tests.py`, `results.md` | Runs every robustness test (original vs current) and writes the table |
+| `light_probe.py`, `orange_probe.py` | Pixel-color probes from Challenges 11 and 12 |
 | `eval_pick.py` | 50-trial evaluation (`--rotate`: random cube rotation, `--align`: rotate gripper to match, `--cpp`: C++ IK) |
 | `detect_cube.py` | Detection + pixel-to-world check |
 | `fk_test.py`, `ik_test.py`, `ik_move.py` | FK, position IK, 6-DoF IK + gravity compensation |
