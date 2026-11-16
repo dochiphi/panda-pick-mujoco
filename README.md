@@ -6,6 +6,7 @@ kinematics plans the grasp, and a gravity-compensated position controller picks 
 Prototyped in Python; the IK solver is also implemented in **C++ (Eigen + MuJoCo C API)** and called from the Python pipeline through **pybind11**.
 <p align="center">
   <img src="demo.gif" width="600">
+  <br><sub>Four picks: rotated cube; second red cube 10 mm away (grasp turns 90°); camera noise + other colors; dim light. Inset: what the robot camera sees. Full HD video: <a href="demo.mp4">demo.mp4</a></sub>
 </p>
 <p align="center">
 <p align="center">
